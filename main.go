@@ -69,5 +69,17 @@ func (c *maasCommand) Run(ctx *cmd.Context) error {
 		fmt.Printf("Zone: %s (%s)\n", zone.Name(), zone.Description())
 	}
 
+	machines, err := controller.Machines(gomaasapi.MachinesParams{})
+	if err != nil {
+		return err
+	}
+
+	for i, machine := range machines {
+		fmt.Printf("\n-- machine %d\n", i+1)
+		fmt.Printf("fqdn: %s\n", machine.FQDN())
+		fmt.Printf("OS: %s/%s\n", machine.OperatingSystem(), machine.DistroSeries())
+		fmt.Printf("Power: %s\n", machine.PowerState())
+	}
+
 	return nil
 }
