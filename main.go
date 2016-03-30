@@ -52,7 +52,7 @@ func (c *maasCommand) Run(ctx *cmd.Context) error {
 	loggo.GetLogger("maas").SetLogLevel(loggo.TRACE)
 
 	controller, err := gomaasapi.NewController(gomaasapi.ControllerArgs{
-		BaseUrl: c.baseurl,
+		BaseURL: c.baseurl,
 		APIKey:  c.creds,
 	})
 
@@ -60,7 +60,14 @@ func (c *maasCommand) Run(ctx *cmd.Context) error {
 		return err
 	}
 
-	_ = controller
+	zones, err := controller.Zones()
+	if err != nil {
+		return err
+	}
+
+	for _, zone := range zones {
+		fmt.Printf("Zone: %s (%s)\n", zone.Name(), zone.Description())
+	}
 
 	return nil
 }
