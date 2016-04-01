@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/juju/cmd"
+	"github.com/juju/errors"
 	"github.com/juju/gomaasapi"
 	"github.com/juju/loggo"
 	"launchpad.net/gnuflag"
@@ -65,11 +66,19 @@ func (c *maasCommand) Run(ctx *cmd.Context) error {
 		return err
 	}
 
+	fabrics, err := controller.Fabrics()
+	if err != nil {
+		return err
+	}
+	for _, fabric := range fabrics {
+		fmt.Printf("Fabric %s(%d) has %d vlans\n", fabric.Name(), fabric.ID(), len(fabric.VLANs()))
+	}
+
 	for _, zone := range zones {
 		fmt.Printf("Zone: %s (%s)\n", zone.Name(), zone.Description())
 	}
 
-	machines, err := controller.Machines(gomaasapi.MachinesParams{})
+	machines, err := controller.Machines(gomaasapi.MachinesArgs{})
 	if err != nil {
 		return err
 	}
@@ -79,6 +88,18 @@ func (c *maasCommand) Run(ctx *cmd.Context) error {
 		fmt.Printf("fqdn: %s\n", machine.FQDN())
 		fmt.Printf("OS: %s/%s\n", machine.OperatingSystem(), machine.DistroSeries())
 		fmt.Printf("Power: %s\n", machine.PowerState())
+	}
+
+	// Try to allocate a machine, dry run.
+
+	_, err = controller.AllocateMachine(gomaasapi.AllocateMachineArgs{
+		MinMemory: 2500,
+		DryRun:    true,
+	})
+	if err != nil {
+		fmt.Printf("Error allocating machine: %s\n", err.Error())
+		fmt.Printf("is bad request: %v\n", errors.IsBadRequest(err))
+		fmt.Printf("stack: \n%s\n", errors.ErrorStack(err))
 	}
 
 	return nil
