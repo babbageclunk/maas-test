@@ -90,17 +90,29 @@ func (c *maasCommand) Run(ctx *cmd.Context) error {
 		fmt.Printf("Power: %s\n", machine.PowerState())
 	}
 
-	// Try to allocate a machine, dry run.
+	id := machines[0].SystemID()
+	fmt.Printf("\nAsking for machine with system ID: %s\n", id)
 
-	_, err = controller.AllocateMachine(gomaasapi.AllocateMachineArgs{
-		MinMemory: 2500,
-		DryRun:    true,
+	machines, err = controller.Machines(gomaasapi.MachinesArgs{
+		SystemIds: []string{id},
 	})
 	if err != nil {
-		fmt.Printf("Error allocating machine: %s\n", err.Error())
-		fmt.Printf("is bad request: %v\n", errors.IsBadRequest(err))
-		fmt.Printf("stack: \n%s\n", errors.ErrorStack(err))
+		return errors.Trace(err)
 	}
+	fmt.Printf("Should just have 1 result: %d\n", len(machines))
+	fmt.Printf("%s\n\n", machines[0].SystemID())
+
+	// Try to allocate a machine, dry run.
+
+	// _, err = controller.AllocateMachine(gomaasapi.AllocateMachineArgs{
+	// 	MinMemory: 2500,
+	// 	DryRun:    true,
+	// })
+	// if err != nil {
+	// 	fmt.Printf("Error allocating machine: %s\n", err.Error())
+	// 	fmt.Printf("is bad request: %v\n", errors.IsBadRequest(err))
+	// 	fmt.Printf("stackerrors.ErrorStack(err))
+	// }
 
 	return nil
 }
