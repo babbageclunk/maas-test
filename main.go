@@ -30,6 +30,9 @@ type maasCommand struct {
 
 	baseurl string
 	creds   string
+
+	action string
+	args   []string
 }
 
 func (c *maasCommand) Info() *cmd.Info {
@@ -46,7 +49,10 @@ func (c *maasCommand) SetFlags(f *gnuflag.FlagSet) {
 }
 
 func (c *maasCommand) Init(args []string) error {
-	return cmd.CheckEmpty(args)
+	if len(args) > 0 {
+		c.action, c.args = args[0], args[1:]
+	}
+	return nil
 }
 
 func (c *maasCommand) Run(ctx *cmd.Context) error {
@@ -61,6 +67,21 @@ func (c *maasCommand) Run(ctx *cmd.Context) error {
 		return err
 	}
 
+	switch c.action {
+	case "":
+		return c.noAction(controller)
+	case "allocate":
+		return c.allocate(controller)
+	case "release":
+		return c.release(controller)
+	default:
+		fmt.Printf("unknown action: %q", c.action)
+	}
+
+	return nil
+}
+
+func (c *maasCommand) noAction(controller gomaasapi.Controller) error {
 	zones, err := controller.Zones()
 	if err != nil {
 		return err
@@ -86,6 +107,7 @@ func (c *maasCommand) Run(ctx *cmd.Context) error {
 	for i, machine := range machines {
 		fmt.Printf("\n-- machine %d\n", i+1)
 		fmt.Printf("fqdn: %s\n", machine.FQDN())
+		fmt.Printf("system id: %s\n", machine.SystemID())
 		fmt.Printf("OS: %s/%s\n", machine.OperatingSystem(), machine.DistroSeries())
 		fmt.Printf("Power: %s\n", machine.PowerState())
 	}
@@ -101,18 +123,36 @@ func (c *maasCommand) Run(ctx *cmd.Context) error {
 	}
 	fmt.Printf("Should just have 1 result: %d\n", len(machines))
 	fmt.Printf("%s\n\n", machines[0].SystemID())
-
-	// Try to allocate a machine, dry run.
-
-	// _, err = controller.AllocateMachine(gomaasapi.AllocateMachineArgs{
-	// 	MinMemory: 2500,
-	// 	DryRun:    true,
-	// })
-	// if err != nil {
-	// 	fmt.Printf("Error allocating machine: %s\n", err.Error())
-	// 	fmt.Printf("is bad request: %v\n", errors.IsBadRequest(err))
-	// 	fmt.Printf("stackerrors.ErrorStack(err))
-	// }
-
 	return nil
+}
+
+func (c *maasCommand) allocate(controller gomaasapi.Controller) error {
+	// Try to allocate a machine, dry run.
+	if len(c.args) != 1 {
+		return errors.Errorf("Expected only one arg to allocate, got %#v", c.args)
+	}
+
+	machine, err := controller.AllocateMachine(gomaasapi.AllocateMachineArgs{
+		Hostname: c.args[0],
+	})
+	if err != nil {
+		fmt.Println(errors.ErrorStack(err))
+		return err
+	}
+
+	fmt.Printf("Allocated machine: %s\n", machine.FQDN())
+	return nil
+}
+
+func (c *maasCommand) release(controller gomaasapi.Controller) error {
+	err := controller.ReleaseMachines(gomaasapi.ReleaseMachinesArgs{
+		SystemIDs: c.args,
+	})
+	if err != nil {
+		fmt.Println(errors.ErrorStack(err))
+		return err
+	}
+	fmt.Printf("Released successfully\n")
+	return nil
+
 }
