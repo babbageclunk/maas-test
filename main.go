@@ -6,7 +6,10 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/juju/cmd"
 	"github.com/juju/errors"
@@ -18,6 +21,7 @@ import (
 var logger = loggo.GetLogger("maas-test")
 
 func main() {
+	rand.Seed(time.Now().UnixNano())
 	ctx, err := cmd.DefaultContext()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -36,6 +40,7 @@ type maasCommand struct {
 
 	action string
 	args   []string
+	parent string
 }
 
 func (c *maasCommand) Info() *cmd.Info {
@@ -49,6 +54,7 @@ func (c *maasCommand) Info() *cmd.Info {
 func (c *maasCommand) SetFlags(f *gnuflag.FlagSet) {
 	f.StringVar(&c.baseurl, "base-url", "http://192.168.100.2/MAAS", "maas to test")
 	f.StringVar(&c.creds, "creds", "", "maas oauth creds")
+	f.StringVar(&c.parent, "parent", "", "a parent")
 	f.BoolVar(&c.read, "read", false, "read the file first")
 	f.BoolVar(&c.debug, "debug", false, "log at trace")
 }
@@ -87,6 +93,8 @@ func (c *maasCommand) Run(ctx *cmd.Context) error {
 		return c.start(controller)
 	case "create-device":
 		return c.createDevice(controller)
+	case "delete-devices":
+		return c.deleteDevices(controller)
 	case "list-files":
 		return c.listFiles(controller)
 	case "add-file":
@@ -95,6 +103,10 @@ func (c *maasCommand) Run(ctx *cmd.Context) error {
 		return c.readFile(controller)
 	case "delete-file":
 		return c.deleteFile(controller)
+	case "container":
+		return c.container(controller)
+	case "unlink-subnet":
+		return c.unlinkSubnet(controller)
 	default:
 		fmt.Printf("unknown action: %q\n\n", c.action)
 	}
@@ -153,13 +165,13 @@ func (c *maasCommand) allocate(controller gomaasapi.Controller) error {
 		return errors.Errorf("Expected only one arg to allocate, got %#v", c.args)
 	}
 
-	machine, err := controller.AllocateMachine(gomaasapi.AllocateMachineArgs{
+	machine, match, err := controller.AllocateMachine(gomaasapi.AllocateMachineArgs{
 		Hostname: c.args[0],
 	})
 	if err != nil {
 		return dumpErr(err)
 	}
-
+	fmt.Printf("match: %#v\n", match)
 	fmt.Printf("Allocated machine: %s\n", machine.FQDN())
 	return nil
 }
@@ -176,6 +188,20 @@ func (c *maasCommand) release(controller gomaasapi.Controller) error {
 
 }
 
+func (c *maasCommand) getMachine(controller gomaasapi.Controller, hostname string) (gomaasapi.Machine, error) {
+	machines, err := controller.Machines(gomaasapi.MachinesArgs{
+		Hostnames: []string{hostname},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if len(machines) != 1 {
+		return nil, errors.Errorf("expected one result, got %d", len(machines))
+	}
+	return machines[0], nil
+}
+
 func (c *maasCommand) start(controller gomaasapi.Controller) error {
 
 	if len(c.args) != 2 {
@@ -185,18 +211,10 @@ func (c *maasCommand) start(controller gomaasapi.Controller) error {
 	hostname := c.args[0]
 	series := c.args[1]
 
-	machines, err := controller.Machines(gomaasapi.MachinesArgs{
-		Hostnames: []string{hostname},
-	})
+	machine, err := c.getMachine(controller, hostname)
 	if err != nil {
-		return err
+		return dumpErr(err)
 	}
-
-	if len(machines) != 1 {
-		return errors.Errorf("expected one result, got %d", len(machines))
-	}
-
-	machine := machines[0]
 
 	err = machine.Start(gomaasapi.StartArgs{
 		DistroSeries: series,
@@ -211,7 +229,9 @@ func (c *maasCommand) start(controller gomaasapi.Controller) error {
 }
 
 func (c *maasCommand) createDevice(controller gomaasapi.Controller) error {
-	args := gomaasapi.CreateDeviceArgs{}
+	args := gomaasapi.CreateDeviceArgs{
+		Parent: c.parent,
+	}
 	if len(c.args) > 0 {
 		args.Hostname, args.MACAddresses = c.args[0], c.args[1:]
 	}
@@ -223,6 +243,32 @@ func (c *maasCommand) createDevice(controller gomaasapi.Controller) error {
 	fmt.Printf("Device created: %s\n", device.SystemID())
 	return nil
 
+}
+
+func (c *maasCommand) deleteDevices(controller gomaasapi.Controller) error {
+	if len(c.args) < 1 {
+		fmt.Println("expected <machine name>")
+		return errors.New("missing args")
+	}
+	hostname := c.args[0]
+	machine, err := c.getMachine(controller, hostname)
+	if err != nil {
+		return dumpErr(err)
+	}
+
+	devices, err := machine.Devices(gomaasapi.DevicesArgs{})
+	if err != nil {
+		return dumpErr(err)
+	}
+
+	for _, device := range devices {
+		err := device.Delete()
+		if err != nil {
+			return dumpErr(err)
+		}
+		fmt.Printf("deleted device %q\n", device.Hostname())
+	}
+	return nil
 }
 
 func (c *maasCommand) listFiles(controller gomaasapi.Controller) error {
@@ -340,4 +386,88 @@ func dumpErr(err error) error {
 	fmt.Printf("\nError type: %T\n", errors.Cause(err))
 	fmt.Println(errors.ErrorStack(err))
 	return err
+}
+
+func (c *maasCommand) container(controller gomaasapi.Controller) error {
+	if c.parent == "" {
+		return errors.Errorf("missing parent")
+	}
+
+	machine, err := c.getMachine(controller, c.parent)
+	if err != nil {
+		return dumpErr(err)
+	}
+	link := machine.BootInterface().Links()[0]
+
+	args := gomaasapi.CreateMachineDeviceArgs{
+		InterfaceName: "eth1",
+		MACAddress:    newMACAddress(),
+		Subnet:        link.Subnet(),
+	}
+	if len(c.args) > 0 {
+		args.Hostname = c.args[0]
+	}
+	device, err := machine.CreateDevice(args)
+	if err != nil {
+		return dumpErr(err)
+	}
+	fmt.Printf("Device %q created\n", device.Hostname())
+
+	return nil
+}
+
+func (c *maasCommand) unlinkSubnet(controller gomaasapi.Controller) error {
+	if len(c.args) < 3 {
+		fmt.Println("expected <device name> <interface name> <subnet name>")
+		return errors.New("missing args")
+	}
+	deviceName := c.args[0]
+	interfaceName := c.args[1]
+	subnetName := c.args[2]
+	devices, err := controller.Devices(gomaasapi.DevicesArgs{
+		Hostname: []string{deviceName},
+	})
+	if err != nil {
+		return dumpErr(err)
+	}
+
+	if len(devices) == 0 {
+		return errors.Errorf("device name %q not found", deviceName)
+	} else if len(devices) > 1 {
+		return errors.Errorf("wat? %#v", devices)
+	}
+	device := devices[0]
+
+	ifaces := device.InterfaceSet()
+
+	var iface gomaasapi.Interface
+	for _, i := range ifaces {
+		if i.Name() == interfaceName {
+			iface = i
+			break
+		}
+	}
+	if iface == nil {
+		return errors.Errorf("interfae name %q not found", interfaceName)
+	}
+
+	for _, link := range iface.Links() {
+		if link.Subnet() != nil && link.Subnet().Name() == subnetName {
+			err = iface.UnlinkSubnet(link.Subnet())
+			if err != nil {
+				return dumpErr(err)
+			}
+			fmt.Printf("subnet %q unlinked from %s interface %s\n", subnetName, device.Hostname(), interfaceName)
+			return nil
+		}
+	}
+	return errors.Errorf("subnet %q not linked to %s interface %s", subnetName, device.Hostname(), interfaceName)
+}
+
+func newMACAddress() string {
+	var values []string
+	for i := 0; i < 6; i++ {
+		values = append(values, fmt.Sprintf("%02x", rand.Intn(256)))
+	}
+	return strings.Join(values, "-")
 }
