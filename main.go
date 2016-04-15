@@ -143,6 +143,13 @@ func (c *maasCommand) noAction(controller gomaasapi.Controller) error {
 		fmt.Printf("system id: %s\n", machine.SystemID())
 		fmt.Printf("OS: %s/%s\n", machine.OperatingSystem(), machine.DistroSeries())
 		fmt.Printf("Power: %s\n", machine.PowerState())
+		fmt.Printf("Physical Devices:\n")
+		for _, dev := range machine.PhysicalBlockDevices() {
+			fmt.Printf("  %s, %s\n", dev.Name(), dev.UsedFor())
+			for _, part := range dev.Partitions() {
+				fmt.Printf("    %d: %s\n", part.ID(), part.UsedFor())
+			}
+		}
 	}
 
 	id := machines[0].SystemID()
